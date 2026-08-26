@@ -1,0 +1,9 @@
+.env
+.env.*
+!ENV_TEMPLATE.txt
+leads.json
+__pycache__/
+*.pyc
+venv/
+.venv/
+.DS_Store

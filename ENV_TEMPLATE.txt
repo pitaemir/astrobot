@@ -1,0 +1,30 @@
+# ============================================================
+#  Copie este conteúdo para um arquivo chamado .env
+#  (o .env nunca deve ir para o Git)
+# ============================================================
+
+# ---- Gemini (IA) ----
+GEMINI_API_KEY=coloque_sua_chave_aqui
+GEMINI_MODEL=gemini-3.6-flash
+
+# ---- WhatsApp / Meta Cloud API ----
+# Deixe vazio para rodar em modo simulacao (mensagens no terminal)
+META_TOKEN=
+META_PHONE_NUMBER_ID=
+META_VERIFY_TOKEN=astrobox_verify
+META_API_VERSION=v21.0
+
+# ---- Chatwoot ----
+# Deixe vazio para desligar o Chatwoot
+CHATWOOT_URL=
+CHATWOOT_ACCOUNT_ID=
+CHATWOOT_INBOX_ID=
+CHATWOOT_API_TOKEN=
+
+# ---- Atendente humano que recebe o resumo ----
+# Formato internacional sem "+": 5511999999999
+ATENDENTE_WHATSAPP=
+
+# ---- Servidor ----
+PORT=5000
+DEBUG=true
