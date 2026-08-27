@@ -19,30 +19,39 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
 
 # ------------------------------------------------- WhatsApp / Meta Cloud API
-# TODO: preencher quando o colega finalizar o cadastro do número na Meta
 META_TOKEN = os.getenv("META_TOKEN", "")
 META_PHONE_NUMBER_ID = os.getenv("META_PHONE_NUMBER_ID", "")
-META_VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN", "astrobox_verify")
 META_API_VERSION = os.getenv("META_API_VERSION", "v21.0")
+META_TEMPLATE_NAME = os.getenv("META_TEMPLATE_NAME", "")
+META_TEMPLATE_LANGUAGE = os.getenv("META_TEMPLATE_LANGUAGE", "pt_BR")
 
 
 # ------------------------------------------------------------------ Chatwoot
-# TODO: preencher com os dados da VM do colega
 CHATWOOT_URL = os.getenv("CHATWOOT_URL", "")
 CHATWOOT_ACCOUNT_ID = os.getenv("CHATWOOT_ACCOUNT_ID", "")
 CHATWOOT_INBOX_ID = os.getenv("CHATWOOT_INBOX_ID", "")
 CHATWOOT_API_TOKEN = os.getenv("CHATWOOT_API_TOKEN", "")
+CHATWOOT_WEBHOOK_SECRET = os.getenv("CHATWOOT_WEBHOOK_SECRET", "")
+CHATWOOT_TEAM_ID = os.getenv("CHATWOOT_TEAM_ID", "")
+CHATWOOT_ASSIGNEE_ID = os.getenv("CHATWOOT_ASSIGNEE_ID", "")
+CHATWOOT_BOT_ONLY_PENDING = os.getenv(
+    "CHATWOOT_BOT_ONLY_PENDING", "true"
+).lower() == "true"
 
 
-# -------------------------------------------------------- Atendente humano
-# Número que recebe o aviso quando um lead termina a qualificação.
-# Formato internacional sem "+": 5511999999999
-ATENDENTE_WHATSAPP = os.getenv("ATENDENTE_WHATSAPP", "")
+# ------------------------------------------------------ Planilha do Google
+GOOGLE_CREDENCIAIS_JSON = os.getenv("GOOGLE_CREDENCIAIS_JSON", "credenciais.json")
+PLANILHA_ID = os.getenv("PLANILHA_ID", "")
+PLANILHA_ABA = os.getenv("PLANILHA_ABA", "")
+PLANILHA_COLUNA_TELEFONE = os.getenv("PLANILHA_COLUNA_TELEFONE", "")
+PLANILHA_COLUNA_NOME = os.getenv("PLANILHA_COLUNA_NOME", "")
+PLANILHA_COLUNA_STATUS = os.getenv("PLANILHA_COLUNA_STATUS", "status_bot")
+PLANILHA_ESCRITA = os.getenv("PLANILHA_ESCRITA", "true").lower() == "true"
 
 
 # ------------------------------------------------------------------ Servidor
 PORT = int(os.getenv("PORT", "5000"))
-DEBUG = os.getenv("DEBUG", "true").lower() == "true"
+DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
 
 def checar_config(obrigatorios):

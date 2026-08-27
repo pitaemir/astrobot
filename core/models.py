@@ -46,6 +46,7 @@ class Lead:
 
     # ---- Integrações ----
     chatwoot_conversation_id: Optional[int] = None
+    planilha_linha: Optional[int] = None
 
     # ------------------------------------------------------------------
     def registrar(self, autor: str, texto: str):

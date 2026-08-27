@@ -1,99 +1,187 @@
-"""
-Servidor do bot Astrobox.
+"""Servidor HTTP do AstroBot integrado como Agent Bot do Chatwoot.
 
 Endpoints:
-    GET  /webhook   → verificação do webhook pela Meta
-    POST /webhook   → mensagens recebidas do WhatsApp
-    POST /disparar  → inicia a conversa com uma lista de leads
-    GET  /leads     → lista os leads e o status de cada um
-    GET  /saude     → checagem rápida de configuração
-
-Rodar:
-    python3 main.py
+    POST /webhook/chatwoot  -> eventos enviados pelo Agent Bot
+    POST /disparar          -> inicia contatos com template aprovado da Meta
+    GET  /leads             -> lista os leads e seus estados
+    GET  /saude             -> checagem rápida da configuração
 """
 
-from flask import Flask, request, jsonify
+from concurrent.futures import ThreadPoolExecutor
+import hashlib
+import hmac
+import time
+
+from flask import Flask, jsonify, request
 
 import config
 from core import conversation
-from integrations import whatsapp_meta, chatwoot
+import core.models as models
+from core import disparo
+from integrations import chatwoot, google_sheets, notificacao, whatsapp_meta
+from storage import events
 from storage import leads as repo
 
+
 app = Flask(__name__)
+executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="astrobot")
 
 
-# ----------------------------------------------------------- Webhook da Meta
-@app.get("/webhook")
-def verificar_webhook():
-    """A Meta chama isto uma vez ao cadastrar a URL do webhook."""
-    modo = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    desafio = request.args.get("hub.challenge")
-
-    if modo == "subscribe" and token == config.META_VERIFY_TOKEN:
-        return desafio, 200
-    return "token inválido", 403
+def _somente_digitos(valor):
+    return "".join(c for c in str(valor or "") if c.isdigit())
 
 
-@app.post("/webhook")
-def receber_mensagem():
-    telefone, texto = whatsapp_meta.extrair_mensagem(request.get_json(silent=True))
+def _assinatura_valida(corpo_bruto, cabecalhos):
+    """Valida a assinatura HMAC emitida pelo Chatwoot, quando configurada."""
+    segredo = config.CHATWOOT_WEBHOOK_SECRET
+    if not segredo:
+        return True
 
-    # Sempre responder 200 rápido: a Meta reenvia o evento se demorarmos.
-    if not telefone or not texto:
-        return jsonify({"ok": True}), 200
-
+    assinatura = cabecalhos.get("X-Chatwoot-Signature", "")
+    timestamp = cabecalhos.get("X-Chatwoot-Timestamp", "")
+    if not assinatura or not timestamp:
+        return False
     try:
-        lead, resposta = conversation.processar(telefone, texto)
-        if resposta:
-            whatsapp_meta.enviar_texto(telefone, resposta)
-    except Exception as erro:  # não derruba o webhook por causa de um lead
-        app.logger.exception("erro processando %s: %s", telefone, erro)
+        if abs(time.time() - int(timestamp)) > 300:
+            return False
+    except ValueError:
+        return False
 
+    mensagem = timestamp.encode("utf-8") + b"." + corpo_bruto
+    calculada = "sha256=" + hmac.new(
+        segredo.encode("utf-8"), mensagem, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(assinatura, calculada)
+
+
+def _extrair_evento_chatwoot(payload):
+    """Normaliza um message_created incoming do Agent Bot."""
+    if not isinstance(payload, dict) or payload.get("event") != "message_created":
+        return None
+    if payload.get("private"):
+        return None
+    if payload.get("message_type") not in ("incoming", 0):
+        return None
+
+    conversa = payload.get("conversation") or {}
+    status = conversa.get("status")
+    if config.CHATWOOT_BOT_ONLY_PENDING and status != "pending":
+        return None
+
+    inbox_id = conversa.get("inbox_id") or (payload.get("inbox") or {}).get("id")
+    if config.CHATWOOT_INBOX_ID and str(inbox_id) != str(config.CHATWOOT_INBOX_ID):
+        return None
+
+    remetente = payload.get("sender") or {}
+    if not remetente:
+        remetente = ((conversa.get("meta") or {}).get("sender") or {})
+    telefone = _somente_digitos(remetente.get("phone_number"))
+    texto = (payload.get("content") or "").strip()
+    conversation_id = conversa.get("id") or payload.get("conversation_id")
+    event_id = payload.get("id")
+
+    if not all((event_id, conversation_id, telefone, texto)):
+        return None
+    return {
+        "event_id": str(event_id),
+        "conversation_id": int(conversation_id),
+        "telefone": telefone,
+        "texto": texto,
+    }
+
+
+def _processar_evento(evento):
+    event_id = evento["event_id"]
+    try:
+        lead = repo.buscar_ou_criar(evento["telefone"])
+        primeira_mensagem_desta_conversa = (
+            lead.chatwoot_conversation_id != evento["conversation_id"]
+        )
+        lead.chatwoot_conversation_id = evento["conversation_id"]
+        repo.salvar(lead)
+
+        if primeira_mensagem_desta_conversa and lead.status not in (
+            models.TRANSFERIDO,
+            models.SEM_INTERESSE,
+        ):
+            try:
+                chatwoot.adicionar_rotulos(evento["conversation_id"], ["ia-atendendo"])
+            except Exception as erro:
+                app.logger.warning("não foi possível aplicar label inicial: %s", erro)
+
+        lead, resposta = conversation.processar(evento["telefone"], evento["texto"])
+        if resposta:
+            chatwoot.enviar_mensagem(evento["conversation_id"], resposta)
+
+        if lead.status == models.TRANSFERIDO:
+            notificacao.avisar_atendente(lead)
+            google_sheets.marcar_lead(lead, google_sheets.QUALIFICADO)
+        elif lead.status == models.SEM_INTERESSE:
+            chatwoot.encerrar_sem_interesse(lead)
+            google_sheets.marcar_lead(lead, google_sheets.SEM_INTERESSE)
+        elif primeira_mensagem_desta_conversa:
+            google_sheets.marcar_lead(lead, google_sheets.RESPONDEU)
+
+        events.concluir(event_id)
+    except Exception as erro:
+        events.liberar(event_id)
+        app.logger.exception("erro processando evento %s: %s", event_id, erro)
+
+
+@app.post("/webhook/chatwoot")
+def receber_evento_chatwoot():
+    corpo_bruto = request.get_data(cache=True)
+    if not _assinatura_valida(corpo_bruto, request.headers):
+        return jsonify({"erro": "assinatura inválida"}), 401
+
+    evento = _extrair_evento_chatwoot(request.get_json(silent=True))
+    if not evento:
+        return jsonify({"ok": True, "ignorado": True}), 200
+    if not events.reservar(evento["event_id"]):
+        return jsonify({"ok": True, "duplicado": True}), 200
+
+    executor.submit(_processar_evento, evento)
     return jsonify({"ok": True}), 200
 
 
-# -------------------------------------------------- Disparo para leads novos
 @app.post("/disparar")
 def disparar():
-    """Inicia a conversa com uma lista de números.
+    """Envia um template aprovado para uma lista de leads com opt-in.
 
-    Body: {"telefones": ["5511999999999", "5521888888888"]}
-
-    ⚠️ Em produção, a primeira mensagem para quem nunca falou com o número
-    precisa ser um TEMPLATE aprovado (janela de 24h da Meta).
-    Ver whatsapp_meta.enviar_template().
+    Body mínimo: {"telefones": ["5511999999999"]}
+    Opcional: {"parametros": {"5511999999999": ["Bruno"]}}
     """
+    if not config.META_TEMPLATE_NAME:
+        return jsonify({"erro": "META_TEMPLATE_NAME não configurado"}), 503
+
     corpo = request.get_json(silent=True) or {}
-    telefones = corpo.get("telefones") or []
-    repo.importar(telefones)
+    resultado = disparo.disparar_lote(
+        corpo.get("telefones") or [],
+        corpo.get("parametros") or {},
+        forcar=bool(corpo.get("forcar", False)),
+    )
+    erros = resultado["erros"]
 
-    enviados = []
-    for telefone in telefones:
-        limpo = "".join(c for c in str(telefone) if c.isdigit())
-        lead, mensagem = conversation.iniciar(limpo)
-        whatsapp_meta.enviar_texto(limpo, mensagem)
-        enviados.append(limpo)
-
-    return jsonify({"disparados": enviados}), 200
+    status_http = 207 if erros else 200
+    return jsonify(resultado), status_http
 
 
-# ------------------------------------------------------------------ Consulta
 @app.get("/leads")
 def listar_leads():
     status = request.args.get("status")
     return jsonify([
         {
-            "telefone": l.telefone,
-            "nome": l.nome,
-            "status": l.status,
-            "score": l.score,
-            "classificacao": l.classificacao,
-            "regiao": l.regiao,
-            "capital_disponivel": l.capital_disponivel,
-            "prazo": l.prazo,
+            "telefone": lead.telefone,
+            "nome": lead.nome,
+            "status": lead.status,
+            "score": lead.score,
+            "classificacao": lead.classificacao,
+            "regiao": lead.regiao,
+            "capital_disponivel": lead.capital_disponivel,
+            "prazo": lead.prazo,
+            "chatwoot_conversation_id": lead.chatwoot_conversation_id,
         }
-        for l in repo.listar(status)
+        for lead in repo.listar(status)
     ])
 
 
@@ -101,17 +189,16 @@ def listar_leads():
 def saude():
     return jsonify({
         "gemini": bool(config.GEMINI_API_KEY),
-        "whatsapp": not whatsapp_meta.modo_simulacao(),
+        "meta_template": bool(config.META_TOKEN and config.META_PHONE_NUMBER_ID and config.META_TEMPLATE_NAME),
         "chatwoot": chatwoot.ativo(),
-        "atendente": bool(config.ATENDENTE_WHATSAPP),
+        "webhook_assinado": bool(config.CHATWOOT_WEBHOOK_SECRET),
+        "handoff_configurado": bool(config.CHATWOOT_TEAM_ID or config.CHATWOOT_ASSIGNEE_ID),
     })
 
 
 if __name__ == "__main__":
-    print(f"\n🚀 Bot Astrobox rodando em http://localhost:{config.PORT}")
-    if whatsapp_meta.modo_simulacao():
-        print("⚠️  WhatsApp em MODO SIMULAÇÃO (META_TOKEN vazio no .env)")
-    if not chatwoot.ativo():
-        print("⚠️  Chatwoot desligado (CHATWOOT_URL vazio no .env)")
-    print()
+    print(f"\nAstroBot rodando em http://localhost:{config.PORT}")
+    print("Webhook do Agent Bot: /webhook/chatwoot")
+    if not config.CHATWOOT_WEBHOOK_SECRET:
+        print("AVISO: CHATWOOT_WEBHOOK_SECRET vazio; validação HMAC desativada")
     app.run(host="0.0.0.0", port=config.PORT, debug=config.DEBUG)

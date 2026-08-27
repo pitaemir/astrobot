@@ -5,7 +5,7 @@ Motor da conversa.
 
 import core.models as models
 from core import scoring
-from integrations import gemini_client, chatwoot, notificacao
+from integrations import gemini_client
 from prompts.qualificacao import CAMPOS_OBRIGATORIOS, MENSAGEM_ABERTURA
 from storage import leads as repo
 
@@ -18,16 +18,8 @@ def iniciar(telefone):
     lead = repo.buscar_ou_criar(telefone)
     lead.status = models.EM_CONVERSA
 
-    if chatwoot.ativo() and not lead.chatwoot_conversation_id:
-        lead.chatwoot_conversation_id = chatwoot.abrir_conversa(telefone)
-
     lead.registrar("bot", MENSAGEM_ABERTURA)
     repo.salvar(lead)
-
-    if lead.chatwoot_conversation_id:
-        chatwoot.espelhar_mensagem(
-            lead.chatwoot_conversation_id, MENSAGEM_ABERTURA, do_bot=True
-        )
 
     return lead, MENSAGEM_ABERTURA
 
@@ -44,13 +36,10 @@ def processar(telefone, mensagem):
     if lead.status in (models.TRANSFERIDO, models.SEM_INTERESSE):
         lead.registrar("lead", mensagem)
         repo.salvar(lead)
-        _espelhar(lead, mensagem, do_bot=False)
         return lead, None
 
     if lead.status == models.NOVO:
         lead.status = models.EM_CONVERSA
-
-    _espelhar(lead, mensagem, do_bot=False)
 
     resultado = gemini_client.gerar_resposta(lead.historico, mensagem)
 
@@ -61,7 +50,6 @@ def processar(telefone, mensagem):
     resposta = resultado["resposta"]
     if resposta:
         lead.registrar("bot", resposta)
-        _espelhar(lead, resposta, do_bot=True)
 
     if _deve_encerrar(lead, resultado):
         _encerrar(lead)
@@ -91,12 +79,4 @@ def _encerrar(lead):
     lead.status = models.QUALIFICADO
     repo.salvar(lead)
 
-    notificacao.avisar_atendente(lead)
     lead.status = models.TRANSFERIDO
-
-
-def _espelhar(lead, texto, do_bot):
-    if lead.chatwoot_conversation_id:
-        chatwoot.espelhar_mensagem(
-            lead.chatwoot_conversation_id, texto, do_bot=do_bot
-        )

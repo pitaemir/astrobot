@@ -3,10 +3,7 @@
  WHATSAPP — META CLOUD API
 =============================================================================
 
- Para ativar, preencha no .env:
-     META_TOKEN=...
-     META_PHONE_NUMBER_ID=...
-     META_VERIFY_TOKEN=astrobox_verify   (o mesmo que você cadastrar na Meta)
+ Esta integração é usada apenas para enviar o template inicial aprovado.
 
  Enquanto META_TOKEN estiver vazio, o modo simulação fica ligado: as
  mensagens são impressas no terminal em vez de enviadas. Assim dá para
@@ -28,34 +25,6 @@ def _url():
         f"https://graph.facebook.com/{config.META_API_VERSION}/"
         f"{config.META_PHONE_NUMBER_ID}/messages"
     )
-
-
-def enviar_texto(telefone, texto):
-    """Envia uma mensagem de texto simples para um número.
-
-    telefone: formato internacional sem "+" (ex: 5511999999999)
-    """
-    if modo_simulacao():
-        print(f"\n[SIMULAÇÃO] → +{telefone}\n{texto}\n")
-        return {"simulado": True}
-
-    resposta = requests.post(
-        _url(),
-        headers={
-            "Authorization": f"Bearer {config.META_TOKEN}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": telefone,
-            "type": "text",
-            "text": {"preview_url": False, "body": texto},
-        },
-        timeout=20,
-    )
-    resposta.raise_for_status()
-    return resposta.json()
 
 
 def enviar_template(telefone, nome_template, idioma="pt_BR", parametros=None):

@@ -2,8 +2,13 @@
 .env.*
 !ENV_TEMPLATE.txt
 leads.json
+processed_events.json
+data/
 __pycache__/
 *.pyc
 venv/
 .venv/
 .DS_Store
+credenciais.json
+*-credentials.json
+service-account*.json
