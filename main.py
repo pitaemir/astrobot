@@ -149,7 +149,15 @@ def disparar():
     """Envia um template aprovado para uma lista de leads com opt-in.
 
     Body mínimo: {"telefones": ["5511999999999"]}
-    Opcional: {"parametros": {"5511999999999": ["Bruno"]}}
+    Opcional:
+        "parametros": {"5511999999999": ["Bruno"]}   variáveis do template
+        "nomes":      {"5511999999999": "Bruno"}     nome vindo da planilha
+        "linhas":     {"5511999999999": 2}           linha de origem na planilha
+        "pausa":      3                              segundos entre mensagens
+
+    Este é o ÚNICO lugar que grava no leads.json durante um disparo. A
+    varredura da planilha (astrobot-sync) chama esta rota em vez de mexer
+    no arquivo — dois processos escrevendo o mesmo JSON se atropelam.
     """
     if not config.META_TEMPLATE_NAME:
         return jsonify({"erro": "META_TEMPLATE_NAME não configurado"}), 503
@@ -159,6 +167,9 @@ def disparar():
         corpo.get("telefones") or [],
         corpo.get("parametros") or {},
         forcar=bool(corpo.get("forcar", False)),
+        nomes_por_telefone=corpo.get("nomes") or {},
+        linhas_por_telefone=corpo.get("linhas") or {},
+        pausa_segundos=float(corpo.get("pausa") or 0),
     )
     erros = resultado["erros"]
 
@@ -193,6 +204,9 @@ def saude():
         "chatwoot": chatwoot.ativo(),
         "webhook_assinado": bool(config.CHATWOOT_WEBHOOK_SECRET),
         "handoff_configurado": bool(config.CHATWOOT_TEAM_ID or config.CHATWOOT_ASSIGNEE_ID),
+        "planilha": google_sheets.ativo(),
+        "disparo_automatico": config.DISPARO_AUTOMATICO,
+        "disparo_intervalo_min": config.DISPARO_INTERVALO_MIN,
     })
 
 

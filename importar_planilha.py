@@ -3,6 +3,13 @@ Lê os contatos da planilha do Google.
 
 Três modos, do mais seguro para o mais definitivo:
 
+    python3 importar_planilha.py preparar
+        Escreve na planilha as colunas que o bot espera. Use --aba Leads
+        para criar uma aba nova em vez de mexer na existente.
+
+    python3 importar_planilha.py inspecionar
+        Mostra a planilha crua, aba por aba. Use quando algo não bate.
+
     python3 importar_planilha.py ler
         Só lê e mostra na tela. Não grava nada, em lugar nenhum.
         É por aqui que você começa.
@@ -68,6 +75,8 @@ def _mostrar(contatos, selecionados, problemas, mapa):
             return f"{AMARELO}não encontrada{RESET}"
         return f"{VERDE}{mapa['cabecalho'][indice]}{RESET}"
 
+    print(f"\n{CINZA}Cabeçalho detectado na linha "
+          f"{mapa.get('linha_cabecalho', 1)}{RESET}")
     print(f"\nColuna de telefone : {nome_col('telefone')}")
     print(f"Coluna de nome     : {nome_col('nome')}")
     print(f"Coluna de status   : {nome_col('status')}")
@@ -121,6 +130,72 @@ def _gravar_origem(selecionados):
             repo.salvar(lead)
 
 
+def comando_preparar(args):
+    """Escreve na planilha as colunas que o bot espera."""
+    if not planilha.ativo():
+        print(f"{VERMELHO}✗ PLANILHA_ID não configurado no .env.{RESET}\n")
+        sys.exit(1)
+
+    try:
+        info = planilha.preparar_planilha(getattr(args, "aba", None), args.forcar)
+    except Exception as erro:
+        print(f"\n{VERMELHO}✗ {erro}{RESET}\n")
+        sys.exit(1)
+
+    verbo = "criada" if info["criada"] else "preparada"
+    _cabecalho(f"ABA '{info['aba']}' {verbo.upper()}")
+    print(f"\n{VERDE}✓ Colunas escritas:{RESET} "
+          f"{' | '.join(info['colunas'])}\n")
+
+    print("Agora é só colar os contatos a partir da linha 2:\n")
+    print(f"  {CINZA}nome         telefone           origem{RESET}")
+    print("  Ana Souza    (19) 99999-0001    instagram")
+    print("  Bruno Lima   +55 11 98888-0002  site\n")
+    print(f"{CINZA}As colunas status_bot e atualizado_em são do bot — "
+          f"deixe em branco, ele preenche sozinho.{RESET}")
+    print(f"{CINZA}O telefone pode vir em qualquer formato; "
+          f"o bot normaliza. Só precisa ter DDD.{RESET}")
+
+    if info["criada"]:
+        print(f"\n{AMARELO}Aba nova criada. Ponha no .env:{RESET}")
+        print(f"    PLANILHA_ABA={info['aba']}")
+
+    print(f"\nDepois de preencher: "
+          f"{VERDE}python3 importar_planilha.py ler{RESET}\n")
+
+
+def comando_inspecionar(args):
+    """Mostra a planilha crua — sem interpretar nada. Para diagnóstico."""
+    if not planilha.ativo():
+        print(f"{VERMELHO}✗ PLANILHA_ID não configurado no .env.{RESET}\n")
+        sys.exit(1)
+
+    try:
+        info = planilha.inspecionar()
+    except Exception as erro:
+        print(f"\n{VERMELHO}✗ {erro}{RESET}\n")
+        sys.exit(1)
+
+    _cabecalho(f"PLANILHA: {info['titulo']}")
+    print(f"\n{len(info['abas'])} aba(s): "
+          f"{', '.join(a['nome'] for a in info['abas'])}")
+
+    for aba in info["abas"]:
+        preenchidas = [l for l in aba["amostra"] if any(str(c).strip() for c in l)]
+        marca = "" if preenchidas else f"  {AMARELO}(vazia){RESET}"
+        print(f"\n{'-' * 66}")
+        print(f"Aba '{aba['nome']}' — grade {aba['linhas']}x{aba['colunas']}{marca}")
+        print(f"{'-' * 66}")
+        if not aba["amostra"]:
+            print(f"  {AMARELO}sem nenhuma linha{RESET}")
+        for numero, linha in enumerate(aba["amostra"], start=1):
+            conteudo = " | ".join(str(c)[:18] for c in linha) or f"{CINZA}(vazia){RESET}"
+            print(f"  {numero:>2}: {conteudo}")
+
+    print(f"\n{CINZA}Se os contatos estão numa aba que não é a primeira, "
+          f"defina PLANILHA_ABA no .env com o nome dela.{RESET}\n")
+
+
 # --------------------------------------------------------------------------
 def comando_ler(args):
     contatos, selecionados, problemas, mapa = _carregar(args)
@@ -146,7 +221,7 @@ def comando_importar(args):
 
 
 def comando_disparar(args):
-    from core import disparo
+    from core import sincronizacao
 
     contatos, selecionados, problemas, mapa = _carregar(args)
     _mostrar(contatos, selecionados, problemas, mapa)
@@ -166,23 +241,9 @@ def comando_disparar(args):
         print("Cancelado.\n")
         return
 
-    _gravar_origem(selecionados)
-    nomes = {c["telefone"]: c["nome"] for c in selecionados if c["nome"]}
-    resultado = disparo.disparar_lote(
-        [c["telefone"] for c in selecionados],
-        forcar=args.forcar,
-        nomes_por_telefone=nomes,
+    resultado = sincronizacao.disparar_da_planilha(
+        selecionados, mapa, forcar=args.forcar
     )
-
-    # Marca o resultado de volta na planilha
-    por_telefone = {c["telefone"]: c for c in selecionados}
-    if config.PLANILHA_ESCRITA:
-        for telefone in resultado["disparados"]:
-            planilha.marcar(por_telefone[telefone]["linha"],
-                            planilha.DISPARADO, mapa)
-        for falha in resultado["erros"]:
-            planilha.marcar(por_telefone[falha["telefone"]]["linha"],
-                            planilha.ERRO, mapa)
 
     _cabecalho("RESULTADO")
     print(f"\n{VERDE}  disparados : {len(resultado['disparados'])}{RESET}")
@@ -203,6 +264,8 @@ def main():
     sub = parser.add_subparsers(dest="comando", required=True)
 
     for nome, funcao, ajuda in [
+        ("preparar", comando_preparar, "escreve na planilha as colunas do bot"),
+        ("inspecionar", comando_inspecionar, "mostra a planilha crua (diagnóstico)"),
         ("ler", comando_ler, "só mostra na tela, não grava nada"),
         ("importar", comando_importar, "grava os contatos no bot"),
         ("disparar", comando_disparar, "importa e envia o template"),
@@ -212,7 +275,10 @@ def main():
         p.add_argument("--todos", action="store_true",
                        help="inclui quem já tem status na planilha")
         p.add_argument("--forcar", action="store_true",
-                       help="reaborda quem já está em conversa")
+                       help="preparar: substitui o cabeçalho existente; "
+                            "disparar: reaborda quem já está em conversa")
+        if nome == "preparar":
+            p.add_argument("--aba", help="cria/usa uma aba com este nome")
         p.set_defaults(funcao=funcao)
 
     args = parser.parse_args()

@@ -49,6 +49,36 @@ NOMES_NOME = ["nome", "name", "lead", "cliente", "responsavel", "responsável"]
 NOMES_STATUS = ["status_bot", "status bot", "status", "situacao", "situação"]
 
 
+def achar_linha_cabecalho(linhas, limite=10):
+    """Índice (0-based) da primeira linha que parece um cabeçalho.
+
+    Planilha real costuma ter linha em branco ou um título antes da
+    tabela. Cabeçalho = primeira linha com pelo menos duas células
+    preenchidas, olhando só as primeiras `limite` linhas.
+    """
+    for indice, linha in enumerate(linhas[:limite]):
+        preenchidas = [c for c in linha if str(c).strip()]
+        if len(preenchidas) >= 2:
+            return indice
+    for indice, linha in enumerate(linhas[:limite]):
+        if any(str(c).strip() for c in linha):
+            return indice
+    return 0
+
+
+def _agora_local():
+    """Horário no fuso configurado — o mesmo que os logs usam.
+
+    Sem isso a planilha grava no fuso do container (UTC), e a equipe lê
+    'atualizado_em' três horas adiantado.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(config.DISPARO_TIMEZONE))
+    except Exception:
+        return datetime.now()
+
+
 def _limpar(texto):
     return re.sub(r"\s+", " ", str(texto or "")).strip().lower()
 
@@ -131,16 +161,23 @@ def interpretar_planilha(linhas, coluna_telefone=None, coluna_nome=None,
         problemas: [{"linha", "bruto", "motivo"}]
         mapa: {"telefone": i, "nome": i, "status": i, "cabecalho": [...]}
     """
-    if not linhas:
-        raise ValueError("A planilha está vazia.")
+    if not linhas or not any(any(str(c).strip() for c in l) for l in linhas):
+        raise ValueError(
+            "A planilha (ou a aba escolhida) está vazia. "
+            "Rode: python3 importar_planilha.py inspecionar"
+        )
 
-    cabecalho = linhas[0]
+    inicio = achar_linha_cabecalho(linhas)
+    cabecalho = linhas[inicio]
     indice_tel = _achar_coluna(cabecalho, NOMES_TELEFONE, coluna_telefone)
     if indice_tel is None:
+        vistas = ", ".join(str(c) for c in cabecalho if str(c).strip())
         raise ValueError(
-            "Não encontrei a coluna de telefone. Colunas da planilha: "
-            + ", ".join(c for c in cabecalho if c)
-            + ". Defina PLANILHA_COLUNA_TELEFONE no .env."
+            "Não encontrei a coluna de telefone.\n"
+            f"  Cabeçalho lido (linha {inicio + 1}): "
+            + (vistas or "(linha vazia)")
+            + "\n  Rode 'python3 importar_planilha.py inspecionar' para ver "
+              "a planilha crua, ou defina PLANILHA_COLUNA_TELEFONE no .env."
         )
 
     indice_nome = _achar_coluna(cabecalho, NOMES_NOME, coluna_nome)
@@ -153,6 +190,7 @@ def interpretar_planilha(linhas, coluna_telefone=None, coluna_nome=None,
         "nome": indice_nome,
         "status": indice_status,
         "cabecalho": cabecalho,
+        "linha_cabecalho": inicio + 1,
     }
 
     def celula(linha, indice):
@@ -162,7 +200,7 @@ def interpretar_planilha(linhas, coluna_telefone=None, coluna_nome=None,
 
     contatos, problemas, vistos = [], [], set()
 
-    for numero_linha, linha in enumerate(linhas[1:], start=2):
+    for numero_linha, linha in enumerate(linhas[inicio + 1:], start=inicio + 2):
         bruto = celula(linha, indice_tel)
         if not bruto and not any(str(c).strip() for c in linha):
             continue  # linha totalmente vazia
@@ -280,7 +318,7 @@ def marcar(linha, status, mapa):
 
     indice = garantir_coluna_status(mapa)
     aba = _abrir_aba()
-    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+    agora = _agora_local().strftime("%d/%m/%Y %H:%M")
 
     aba.batch_update([
         {"range": _celula_a1(linha, indice), "values": [[status]]},
@@ -297,6 +335,74 @@ def _celula_a1(linha, coluna_zero_based):
         numero, resto = divmod(numero - 1, 26)
         letras = chr(65 + resto) + letras
     return f"{letras}{linha}"
+
+
+# Estrutura que o bot espera. "origem" é livre — serve para a equipe
+# saber de onde veio o lead; o bot não usa, mas também não atrapalha.
+COLUNAS_PADRAO = ["nome", "telefone", "origem", "status_bot", "atualizado_em"]
+
+
+def preparar_planilha(nome_aba=None, forcar=False):
+    """Escreve na planilha o cabeçalho que o bot espera.
+
+    Nunca sobrescreve dados: se a aba de destino já tiver conteúdo, para
+    e explica, a não ser que forcar=True (que substitui só a linha 1).
+
+    Devolve {"aba", "criada", "colunas"}.
+    """
+    import gspread
+
+    cliente = gspread.service_account(filename=config.GOOGLE_CREDENCIAIS_JSON)
+    planilha = cliente.open_by_key(config.PLANILHA_ID)
+
+    alvo = nome_aba or config.PLANILHA_ABA or None
+    existentes = {aba.title: aba for aba in planilha.worksheets()}
+    criada = False
+
+    if alvo and alvo in existentes:
+        aba = existentes[alvo]
+    elif alvo:
+        aba = planilha.add_worksheet(title=alvo, rows=500,
+                                     cols=len(COLUNAS_PADRAO) + 2)
+        criada = True
+    else:
+        aba = planilha.sheet1
+
+    if not criada and not forcar:
+        conteudo = aba.get_all_values()
+        if any(any(str(c).strip() for c in linha) for linha in conteudo):
+            raise ValueError(
+                f"A aba '{aba.title}' já tem conteúdo — não vou sobrescrever.\n"
+                "  Para criar uma aba nova:  --aba Leads\n"
+                "  Para substituir só o cabeçalho desta aba:  --forcar"
+            )
+
+    fim = _celula_a1(1, len(COLUNAS_PADRAO) - 1)
+    aba.batch_update([{"range": f"A1:{fim}", "values": [COLUNAS_PADRAO]}])
+
+    try:
+        aba.format(f"A1:{fim}", {"textFormat": {"bold": True}})
+        aba.freeze(rows=1)
+    except Exception:
+        pass  # formatação é cosmética; não vale derrubar o comando
+
+    return {"aba": aba.title, "criada": criada, "colunas": COLUNAS_PADRAO}
+
+
+def inspecionar():
+    """Devolve a estrutura crua da planilha, para diagnóstico."""
+    import gspread
+
+    cliente = gspread.service_account(filename=config.GOOGLE_CREDENCIAIS_JSON)
+    planilha = cliente.open_by_key(config.PLANILHA_ID)
+    return {
+        "titulo": planilha.title,
+        "abas": [
+            {"nome": aba.title, "linhas": aba.row_count,
+             "colunas": aba.col_count, "amostra": aba.get_all_values()[:8]}
+            for aba in planilha.worksheets()
+        ],
+    }
 
 
 _mapa_cache = None

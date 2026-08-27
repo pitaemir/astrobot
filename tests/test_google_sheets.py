@@ -107,6 +107,26 @@ class InterpretarPlanilhaTests(unittest.TestCase):
         self.assertIn("Fone", str(contexto.exception))
 
 
+class CabecalhoForaDaLinha1Tests(unittest.TestCase):
+    def test_pula_titulo_e_linhas_em_branco_antes_da_tabela(self):
+        linhas = [
+            ["Leads Astrobox - agosto"],       # título
+            [],                                 # branco
+            ["", "", ""],                       # branco
+            ["Nome", "Telefone", "Origem"],     # cabeçalho de verdade
+            ["Ana", "19999990001", "site"],
+        ]
+        contatos, _, mapa = planilha.interpretar_planilha(linhas)
+        self.assertEqual(mapa["linha_cabecalho"], 4)
+        self.assertEqual(contatos[0]["linha"], 5)   # linha real da planilha
+        self.assertEqual(contatos[0]["telefone"], "5519999990001")
+
+    def test_planilha_toda_vazia_da_erro_util(self):
+        with self.assertRaises(ValueError) as ctx:
+            planilha.interpretar_planilha([[], ["", ""], []])
+        self.assertIn("inspecionar", str(ctx.exception))
+
+
 class CelulaA1Tests(unittest.TestCase):
     def test_converte_indice_para_notacao_a1(self):
         self.assertEqual(planilha._celula_a1(2, 0), "A2")

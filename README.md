@@ -165,9 +165,38 @@ PLANILHA_ESCRITA=true
 O `credenciais.json` está no `.gitignore` — ele é uma credencial, nunca vai
 para o repositório.
 
+## Preparar a planilha
+
+Em vez de adivinhar o formato, deixe o bot escrever a estrutura:
+
+```bash
+python3 importar_planilha.py preparar
+```
+
+Ele grava o cabeçalho `nome | telefone | origem | status_bot | atualizado_em`
+na primeira aba, em negrito e com a linha congelada. Depois é só colar os
+contatos a partir da linha 2.
+
+Se a aba já tiver conteúdo, ele **para e avisa** em vez de sobrescrever.
+Nesse caso:
+
+```bash
+python3 importar_planilha.py preparar --aba Leads    # cria uma aba nova
+python3 importar_planilha.py preparar --forcar       # troca só a linha 1
+```
+
+Criando aba nova, lembre de pôr `PLANILHA_ABA=Leads` no `.env` — o próprio
+comando avisa.
+
+Nada disso é obrigatório: se a planilha já existe com outro cabeçalho, o bot
+detecta as colunas sozinho (ver abaixo). O `preparar` serve para começar do
+zero sem erro.
+
 ## Usar
 
 ```bash
+python3 importar_planilha.py preparar            # cria as colunas do bot
+python3 importar_planilha.py inspecionar         # mostra a planilha crua
 python3 importar_planilha.py ler                 # só mostra, não grava nada
 python3 importar_planilha.py importar            # grava no leads.json
 python3 importar_planilha.py disparar --limite 3 # envia o template
@@ -194,6 +223,10 @@ Funciona também com variações (`WhatsApp do contato`, `Telefone do lead`).
 Se o cabeçalho for muito diferente, force pelo `.env`:
 `PLANILHA_COLUNA_TELEFONE=`, `PLANILHA_COLUNA_NOME=`, `PLANILHA_COLUNA_STATUS=`.
 
+O cabeçalho não precisa estar na linha 1 — o bot procura nas 10 primeiras
+linhas, pulando título e linhas em branco, e continua reportando o número
+real da linha na planilha.
+
 A coluna de status não precisa existir — o bot cria `status_bot` e
 `atualizado_em` no fim da planilha na primeira vez que escreve.
 
@@ -201,6 +234,96 @@ Telefones são normalizados para o formato internacional (`5519999990001`).
 Aceita `(19) 99999-0001`, `+55 19 99999-0001`, `19999990001`. Duplicados,
 linhas sem DDD e células sem número são separados e listados na tela, nunca
 descartados em silêncio.
+
+## Disparo automático
+
+O Google Sheets não avisa quando alguém adiciona uma linha — não existe
+webhook de "contato novo". Então o bot vai lá conferir de tempos em tempos.
+
+Em produção quem faz isso é o serviço `astrobot-sync` do `docker-compose`
+(container separado de propósito: o `astrobot` roda com 2 workers do
+gunicorn, e um agendador dentro do app dispararia em dobro).
+
+```bash
+docker compose up -d              # sobe o bot e a varredura
+docker compose logs -f astrobot-sync
+```
+
+Para testar na mão:
+
+```bash
+python3 sincronizar.py --uma-vez           # uma varredura e sai
+python3 sincronizar.py --uma-vez --agora   # ignora a janela de horário
+```
+
+### Como o disparo sai
+
+A varredura **não grava no `leads.json`** — ela chama a rota `/disparar`
+do próprio bot:
+
+```
+astrobot-sync                         astrobot
+  lê a planilha
+  monta a fila      ── POST /disparar ──►  grava no leads.json
+                                           envia o template pela Meta
+  marca o status    ◄── resultado ──────
+  de volta na planilha
+```
+
+O motivo é chato mas importante: o `leads.json` é protegido por um lock de
+thread, que só vale **dentro de um processo**. São dois containers. Se os
+dois gravassem no mesmo arquivo, um sobrescreveria o escrito pelo outro —
+lead perdido, ou JSON corrompido. Passando pela rota, só o processo do
+servidor escreve.
+
+Por isso o `astrobot-sync` no compose **não monta `./data`**. É de
+propósito.
+
+Com `ASTROBOT_URL` vazio ele chama a função no mesmo processo — modo local,
+para rodar o comando na mão com o servidor desligado.
+
+O corpo aceito pela rota:
+
+```json
+{
+  "telefones": ["5519998652758"],
+  "nomes":     {"5519998652758": "Bruno"},
+  "linhas":    {"5519998652758": 3},
+  "parametros":{"5519998652758": ["Bruno"]},
+  "pausa": 3
+}
+```
+
+`linhas` é a linha de origem na planilha — é ela que permite ao bot
+escrever o status de volta quando o lead responder no Chatwoot.
+
+### Travas
+
+| Variável | Padrão | O que faz |
+|---|---|---|
+| `DISPARO_AUTOMATICO` | `false` | interruptor geral — nada sai enquanto for false |
+| `DISPARO_INTERVALO_MIN` | `120` | de quanto em quanto tempo varre a planilha |
+| `DISPARO_MAX_POR_RODADA` | `20` | teto de mensagens por varredura |
+| `DISPARO_PAUSA_SEGUNDOS` | `3` | respiro entre uma mensagem e outra |
+| `DISPARO_DIAS` | `0,1,2,3,4` | 0=segunda … 6=domingo |
+| `DISPARO_HORA_INICIO` / `_FIM` | `9` / `18` | janela em que pode abordar |
+| `DISPARO_TIMEZONE` | `America/Sao_Paulo` | fuso da janela e dos carimbos na planilha |
+
+Contato colado fora da janela não é perdido: fica na fila e sai na próxima
+abertura. O log diz quando será.
+
+Fora da janela o bot **nem chega a ler a planilha** — economiza chamada e
+deixa claro no log por que não disparou.
+
+### Por que não duplica
+
+Duas camadas independentes:
+
+1. a coluna `status_bot` na planilha tira da fila quem já foi abordado
+2. o `leads.json` recusa quem não está em `novo` / `sem_resposta`
+
+Se a escrita na planilha falhar (rede caiu no meio), a segunda camada
+segura. Rodar a varredura duas vezes seguidas não manda nada duas vezes.
 
 ## Status escritos de volta
 

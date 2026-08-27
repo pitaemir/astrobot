@@ -49,6 +49,26 @@ PLANILHA_COLUNA_STATUS = os.getenv("PLANILHA_COLUNA_STATUS", "status_bot")
 PLANILHA_ESCRITA = os.getenv("PLANILHA_ESCRITA", "true").lower() == "true"
 
 
+# --------------------------------------------------- Disparo automático
+# Varredura periódica da planilha. Desligado por padrão: ligue só quando
+# estiver confortável, porque isso manda mensagem real para gente real.
+# URL do próprio bot. A varredura dispara por aqui em vez de gravar no
+# leads.json direto — só um processo pode escrever nesse arquivo.
+# Vazio = chama a função no mesmo processo (uso local, sem servidor rodando).
+ASTROBOT_URL = os.getenv("ASTROBOT_URL", "")
+
+DISPARO_AUTOMATICO = os.getenv("DISPARO_AUTOMATICO", "false").lower() == "true"
+DISPARO_INTERVALO_MIN = int(os.getenv("DISPARO_INTERVALO_MIN", "120"))
+DISPARO_MAX_POR_RODADA = int(os.getenv("DISPARO_MAX_POR_RODADA", "20"))
+DISPARO_PAUSA_SEGUNDOS = float(os.getenv("DISPARO_PAUSA_SEGUNDOS", "3"))
+
+# Janela em que o bot pode abordar. 0=segunda ... 6=domingo
+DISPARO_TIMEZONE = os.getenv("DISPARO_TIMEZONE", "America/Sao_Paulo")
+DISPARO_DIAS = os.getenv("DISPARO_DIAS", "0,1,2,3,4")
+DISPARO_HORA_INICIO = int(os.getenv("DISPARO_HORA_INICIO", "9"))
+DISPARO_HORA_FIM = int(os.getenv("DISPARO_HORA_FIM", "18"))
+
+
 # ------------------------------------------------------------------ Servidor
 PORT = int(os.getenv("PORT", "5000"))
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"

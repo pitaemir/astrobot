@@ -47,3 +47,20 @@ PLANILHA_COLUNA_TELEFONE=
 PLANILHA_COLUNA_NOME=
 PLANILHA_COLUNA_STATUS=status_bot
 PLANILHA_ESCRITA=true
+
+# ---- Disparo automatico a partir da planilha ----
+# URL do proprio bot. No docker-compose ja vem definida.
+# Vazia = dispara no mesmo processo (uso local, sem servidor no ar).
+ASTROBOT_URL=
+
+# false = so dispara quando voce roda o comando na mao
+DISPARO_AUTOMATICO=false
+DISPARO_INTERVALO_MIN=120
+DISPARO_MAX_POR_RODADA=20
+DISPARO_PAUSA_SEGUNDOS=3
+
+# Janela de horario. DISPARO_DIAS: 0=segunda ... 6=domingo
+DISPARO_TIMEZONE=America/Sao_Paulo
+DISPARO_DIAS=0,1,2,3,4
+DISPARO_HORA_INICIO=9
+DISPARO_HORA_FIM=18

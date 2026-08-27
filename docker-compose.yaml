@@ -27,3 +27,20 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+
+  astrobot-sync:
+    build:
+      context: .
+    container_name: astrobot-sync
+    restart: unless-stopped
+    command: ["python", "sincronizar.py"]
+    env_file:
+      - .env
+    environment:
+      # Dispara pela rota do astrobot. Este container NÃO monta ./data
+      # de propósito: só o servidor pode escrever no leads.json.
+      ASTROBOT_URL: http://astrobot:5000
+    depends_on:
+      - astrobot
+    security_opt:
+      - no-new-privileges:true
